@@ -33,6 +33,8 @@ const BUILTIN_COMMANDS: Record<string, SlashCommand[]> = {
         { name: 'plan', description: 'Toggle plan mode', source: 'builtin' },
     ],
     codex: [
+        { name: 'clear', description: 'Clear current Codex thread context', source: 'builtin' },
+        { name: 'compact', description: 'Compact current Codex thread context', source: 'builtin' },
         { name: 'help', description: 'Show supported HAPI Codex slash commands', source: 'builtin' },
         { name: 'plan', description: 'Enable plan mode; use /plan off to return to default', source: 'builtin' },
         { name: 'default', description: 'Return Codex collaboration mode to default', source: 'builtin' },

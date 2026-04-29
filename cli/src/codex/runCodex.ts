@@ -14,6 +14,7 @@ import { CodexCollaborationModeSchema, PermissionModeSchema } from '@hapi/protoc
 import { formatMessageWithAttachments } from '@/utils/attachmentFormatter';
 import { getInvokedCwd } from '@/utils/invokedCwd';
 import type { ReasoningEffort } from './appServerTypes';
+import { parseCodexSpecialCommand } from './codexSpecialCommands';
 import { listSlashCommands } from '@/modules/common/slashCommands';
 import { resolveCodexSlashCommand } from './utils/slashCommands';
 
@@ -139,6 +140,7 @@ export async function runCodex(opts: {
             try {
                 syncCurrentConfigFromSession();
                 let text = message.content.text;
+                let isolatedCommandText: string | null = null;
                 const commands = await listSlashCommands('codex', workingDirectory).catch(() => []);
                 const slash = resolveCodexSlashCommand(text, {
                     commands,
@@ -161,6 +163,12 @@ export async function runCodex(opts: {
                         return;
                     }
                     text = slash.text;
+                } else {
+                    const specialCommand = parseCodexSpecialCommand(message.content.text);
+                    if (specialCommand.type) {
+                        logger.debug(`[Codex] Detected special command: ${specialCommand.type}`);
+                        isolatedCommandText = message.content.text.trim();
+                    }
                 }
                 text = formatMessageWithAttachments(text, message.content.attachments);
 
@@ -177,6 +185,10 @@ export async function runCodex(opts: {
                     modelReasoningEffort: currentModelReasoningEffort,
                     collaborationMode: currentCollaborationMode
                 };
+                if (isolatedCommandText) {
+                    messageQueue.pushIsolateAndClear(isolatedCommandText, enhancedMode, localId);
+                    return;
+                }
                 messageQueue.push(text, enhancedMode, localId);
             } catch (error) {
                 logger.debug('[Codex] Failed to handle user message', error);

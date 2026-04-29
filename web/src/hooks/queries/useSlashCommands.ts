@@ -4,7 +4,7 @@ import type { ApiClient } from '@/api/client'
 import type { SlashCommand } from '@/types/api'
 import type { Suggestion } from '@/hooks/useActiveSuggestions'
 import { queryKeys } from '@/lib/query-keys'
-import { getBuiltinSlashCommands } from '@/lib/codexSlashCommands'
+import { getBuiltinSlashCommands, mergeSlashCommands } from '@/lib/codexSlashCommands'
 
 function levenshteinDistance(a: string, b: string): number {
     if (a.length === 0) return b.length
@@ -56,11 +56,7 @@ export function useSlashCommands(
         const builtin = getBuiltinSlashCommands(agentType)
 
         if (query.data?.success && query.data.commands) {
-            const commandMap = new Map<string, SlashCommand>()
-            for (const command of [...builtin, ...query.data.commands]) {
-                commandMap.set(command.name, command)
-            }
-            return Array.from(commandMap.values())
+            return mergeSlashCommands([...builtin, ...query.data.commands])
         }
 
         // Fallback to built-in commands only

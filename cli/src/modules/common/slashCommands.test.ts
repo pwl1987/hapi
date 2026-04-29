@@ -114,12 +114,29 @@ describe('listSlashCommands', () => {
         const commands = await listSlashCommands('codex', projectDir)
 
         expect(commands.map((command) => command.name)).toEqual(expect.arrayContaining([
+            'clear',
+            'compact',
             'plan',
             'status',
             'model',
             'reasoning',
             'permissions',
         ]))
+    })
+
+    it('lets project codex prompts override same-name built-ins', async () => {
+        await writeFile(
+            join(projectDir, '.codex', 'prompts', 'clear.md'),
+            ['---', 'description: Project clear', '---', '', 'Project clear prompt'].join('\n')
+        )
+
+        const commands = await listSlashCommands('codex', projectDir)
+        const clearCommands = commands.filter(cmd => cmd.name === 'clear')
+
+        expect(clearCommands).toHaveLength(1)
+        expect(clearCommands[0]?.source).toBe('project')
+        expect(clearCommands[0]?.description).toBe('Project clear')
+        expect(clearCommands[0]?.content).toBe('Project clear prompt')
     })
 
     it('loads Codex global and project prompts', async () => {

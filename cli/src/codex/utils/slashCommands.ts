@@ -7,8 +7,6 @@ import type { SlashCommand } from '@/modules/common/slashCommands';
 const REASONING_EFFORTS = new Set<ReasoningEffort>(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
 
 const UNSUPPORTED_CODEX_BUILTIN_COMMANDS = new Set([
-    'clear',
-    'compact',
     'compat',
     'diff',
     'init',
@@ -180,6 +178,8 @@ export function resolveCodexSlashCommand(
                 'Supported Codex slash commands:',
                 '/plan [prompt] — enable plan mode, optionally send prompt',
                 '/plan off — return to default mode',
+                '/clear — reset current Codex thread context',
+                '/compact — compact current Codex thread context',
                 '/status — show current Codex session config',
                 '/model [name|auto] — show or set model',
                 '/reasoning [low|medium|high|xhigh|default] — show or set reasoning effort',
