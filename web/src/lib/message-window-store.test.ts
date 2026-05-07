@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import type { ApiClient } from '@/api/client'
 import type { DecryptedMessage, MessageStatus } from '@/types/api'
 import {
     appendOptimisticMessage,
     clearMessageWindow,
+    fetchLatestMessages,
     getMessageWindowState,
     ingestIncomingMessages,
     markMessagesConsumed,
     removeOptimisticMessage,
+    VISIBLE_WINDOW_SIZE,
     updateMessageStatus,
 } from '@/lib/message-window-store'
 
@@ -29,6 +32,7 @@ function makeMsg(overrides: Partial<DecryptedMessage> = {}): DecryptedMessage {
 
 function makeUserMessage(props: {
     id: string
+    seq?: number | null
     localId?: string
     status?: MessageStatus
     text?: string
@@ -36,7 +40,7 @@ function makeUserMessage(props: {
 }): DecryptedMessage {
     return {
         id: props.id,
-        seq: null,
+        seq: props.seq ?? null,
         localId: props.localId ?? null,
         content: {
             role: 'user',
@@ -48,6 +52,60 @@ function makeUserMessage(props: {
         createdAt: props.createdAt ?? Date.now(),
         status: props.status,
         originalText: props.text ?? 'hello',
+    } as DecryptedMessage
+}
+
+function makeAgentMessage(props: {
+    id: string
+    seq?: number | null
+    createdAt?: number
+    text?: string
+}): DecryptedMessage {
+    return {
+        id: props.id,
+        seq: props.seq ?? null,
+        localId: null,
+        content: {
+            role: 'agent',
+            content: {
+                type: 'codex',
+                data: {
+                    type: 'message',
+                    message: props.text ?? 'agent text'
+                }
+            }
+        },
+        createdAt: props.createdAt ?? Date.now(),
+        invokedAt: props.createdAt ?? Date.now()
+    } as DecryptedMessage
+}
+
+function makeAgentRunMessage(props: {
+    id: string
+    seq?: number | null
+    createdAt?: number
+    eventType?: 'agent-run-start' | 'agent-run-update' | 'agent-run-trace'
+}): DecryptedMessage {
+    const eventType = props.eventType ?? 'agent-run-update'
+    return {
+        id: props.id,
+        seq: props.seq ?? null,
+        localId: null,
+        content: {
+            role: 'agent',
+            content: {
+                type: 'codex',
+                data: {
+                    type: eventType,
+                    cardId: 'spawn-1',
+                    agentId: 'agent-1',
+                    status: 'running',
+                    activity: 'Running'
+                }
+            }
+        },
+        createdAt: props.createdAt ?? Date.now(),
+        invokedAt: props.createdAt ?? Date.now()
     } as DecryptedMessage
 }
 
@@ -164,5 +222,116 @@ describe('message-window-store status updates', () => {
 
         const message = getMessageWindowState(SESSION_ID).messages.find((entry) => entry.id === 'server-queued')
         expect(message?.status).toBe('sent')
+    })
+})
+
+describe('message-window-store visible trimming', () => {
+    const SESSION_ID = 'session-message-window-trim-test'
+
+    afterEach(() => {
+        clearMessageWindow(SESSION_ID)
+    })
+
+    it('does not evict main conversation messages when Codex subagent events flood the window', () => {
+        const baseTime = 1_700_000_000_000
+        const messages: DecryptedMessage[] = [
+            makeUserMessage({
+                id: 'main-user',
+                seq: 1,
+                text: 'main prompt before subagents',
+                createdAt: baseTime
+            })
+        ]
+
+        for (let i = 0; i < VISIBLE_WINDOW_SIZE + 1; i += 1) {
+            messages.push(makeAgentRunMessage({
+                id: `agent-run-${i}`,
+                seq: i + 2,
+                createdAt: baseTime + i + 1
+            }))
+        }
+
+        ingestIncomingMessages(SESSION_ID, messages)
+
+        const state = getMessageWindowState(SESSION_ID)
+        expect(state.messages.some((message) => message.id === 'main-user')).toBe(true)
+        expect(state.messages.some((message) => message.id === 'agent-run-0')).toBe(true)
+    })
+
+    it('marks the window as pageable when regular live messages are trimmed', () => {
+        const baseTime = 1_700_000_100_000
+        const messages: DecryptedMessage[] = []
+        for (let i = 0; i < VISIBLE_WINDOW_SIZE + 1; i += 1) {
+            messages.push(makeAgentMessage({
+                id: `agent-message-${i}`,
+                seq: i + 1,
+                createdAt: baseTime + i
+            }))
+        }
+
+        ingestIncomingMessages(SESSION_ID, messages)
+
+        const state = getMessageWindowState(SESSION_ID)
+        expect(state.messages).toHaveLength(VISIBLE_WINDOW_SIZE)
+        expect(state.messages.some((message) => message.id === 'agent-message-0')).toBe(false)
+        expect(state.hasMore).toBe(true)
+        expect(state.oldestSeq).toBe(2)
+    })
+
+    it('backfills cold latest load when the newest page is filled by Codex subagent events', async () => {
+        const baseTime = 1_700_000_200_000
+        const latestAgentRuns: DecryptedMessage[] = []
+        for (let i = 0; i < 50; i += 1) {
+            latestAgentRuns.push(makeAgentRunMessage({
+                id: `agent-run-latest-${i}`,
+                seq: i + 2,
+                createdAt: baseTime + i + 2
+            }))
+        }
+        const mainMessage = makeUserMessage({
+            id: 'main-user-before-agent-flood',
+            seq: 1,
+            text: 'main prompt before subagents',
+            createdAt: baseTime + 1
+        })
+
+        const calls: Array<{ beforeAt?: number | null; beforeSeq?: number | null; limit?: number }> = []
+        const api = {
+            getMessages: async (_sessionId: string, options: { beforeAt?: number | null; beforeSeq?: number | null; limit?: number }) => {
+                calls.push(options)
+                if (calls.length === 1) {
+                    return {
+                        messages: latestAgentRuns,
+                        page: {
+                            limit: options.limit ?? 50,
+                            nextBeforeSeq: 2,
+                            nextBeforeAt: baseTime + 2,
+                            hasMore: true
+                        }
+                    }
+                }
+                return {
+                    messages: [mainMessage],
+                    page: {
+                        limit: options.limit ?? 200,
+                        nextBeforeSeq: 1,
+                        nextBeforeAt: baseTime + 1,
+                        hasMore: false
+                    }
+                }
+            }
+        } as Pick<ApiClient, 'getMessages'>
+
+        await fetchLatestMessages(api as ApiClient, SESSION_ID)
+
+        const state = getMessageWindowState(SESSION_ID)
+        expect(calls).toHaveLength(2)
+        expect(calls[1]).toMatchObject({
+            beforeSeq: 2,
+            beforeAt: baseTime + 2,
+            limit: 200
+        })
+        expect(state.messages.some((message) => message.id === 'main-user-before-agent-flood')).toBe(true)
+        expect(state.messages.filter((message) => message.id.startsWith('agent-run-latest-'))).toHaveLength(50)
     })
 })
