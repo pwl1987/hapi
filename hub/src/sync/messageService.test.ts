@@ -65,6 +65,152 @@ function makePublisher() {
 // Tests
 // ---------------------------------------------------------------------------
 
+describe('MessageService goal status filtering', () => {
+    function redundantGoalStatusContent(message: string): unknown {
+        return {
+            role: 'agent',
+            content: {
+                id: `event-${message}`,
+                type: 'event',
+                data: { type: 'message', message }
+            }
+        }
+    }
+
+    it('hides stored redundant goal status events but keeps actionable goal messages', () => {
+        const store = makeStore()
+        const session = makeSession(store, 'goal-status-filter')
+
+        store.messages.addMessage(session.id, { role: 'user', content: { type: 'text', text: '/goal ship it' } })
+        store.messages.addMessage(session.id, redundantGoalStatusContent('Goal active · 8016 tokens'))
+        store.messages.addMessage(session.id, redundantGoalStatusContent('No goal to clear'))
+
+        const service = new MessageService(store, makeIo(() => {}), makePublisher() as any)
+        const page = service.getMessagesPage(session.id, { limit: 10, before: null })
+
+        expect(page.messages.map(message => message.content)).toEqual([
+            { role: 'user', content: { type: 'text', text: '/goal ship it' } },
+            redundantGoalStatusContent('No goal to clear')
+        ])
+    })
+
+    it('pages past hidden-only goal status rows', () => {
+        const store = makeStore()
+        const session = makeSession(store, 'goal-status-pagination')
+
+        const user = store.messages.addMessage(session.id, { role: 'user', content: { type: 'text', text: '/goal ship it' } })
+        store.messages.addMessage(session.id, redundantGoalStatusContent('Goal active'))
+
+        const service = new MessageService(store, makeIo(() => {}), makePublisher() as any)
+        const latest = service.getMessagesPage(session.id, { limit: 1, before: null })
+
+        expect(latest.messages).toHaveLength(1)
+        expect(latest.messages[0]?.id).toBe(user.id)
+        expect(latest.page.nextBeforeSeq).toBe(user.seq)
+        expect(latest.page.hasMore).toBe(false)
+    })
+
+    it('pages past hidden-only goal status rows in position pagination', () => {
+        const store = makeStore()
+        const session = makeSession(store, 'goal-status-position-pagination')
+
+        const user = store.messages.addMessage(session.id, { role: 'user', content: { type: 'text', text: '/goal ship it' } })
+        store.messages.addMessage(session.id, redundantGoalStatusContent('Goal active · 8016 tokens'))
+
+        const service = new MessageService(store, makeIo(() => {}), makePublisher() as any)
+        const latest = service.getMessagesPage(session.id, { limit: 1, before: null })
+
+        expect(latest.messages).toHaveLength(1)
+        expect(latest.messages[0]?.id).toBe(user.id)
+        expect(latest.page.nextBeforeSeq).toBe(user.seq)
+        expect(latest.page.hasMore).toBe(false)
+    })
+})
+
+describe('MessageService message pagination', () => {
+    function makeService(store: Store): MessageService {
+        return new MessageService(store, makeIo(() => {}), makePublisher() as any)
+    }
+
+    it('returns the latest page with a composite cursor', () => {
+        const store = makeStore()
+        const session = makeSession(store, 'page-first')
+        const first = store.messages.addMessage(session.id, 'first', 'local-first')
+        const second = store.messages.addMessage(session.id, 'second', 'local-second')
+        const third = store.messages.addMessage(session.id, 'third', 'local-third')
+        store.messages.markMessagesInvoked(session.id, ['local-first'], 1_000)
+        store.messages.markMessagesInvoked(session.id, ['local-second'], 2_000)
+        store.messages.markMessagesInvoked(session.id, ['local-third'], 3_000)
+
+        const page = makeService(store).getMessagesPage(session.id, { limit: 2, before: null })
+
+        expect(page.messages.map((message) => message.id)).toEqual([second.id, third.id])
+        expect(page.page.nextBeforeAt).toBe(2_000)
+        expect(page.page.nextBeforeSeq).toBe(second.seq)
+        expect(page.page.hasMore).toBe(true)
+        expect(first.id).toBeDefined()
+    })
+
+    it('uses the composite cursor for older pages', () => {
+        const store = makeStore()
+        const session = makeSession(store, 'page-older')
+        const first = store.messages.addMessage(session.id, 'first', 'local-first')
+        const second = store.messages.addMessage(session.id, 'second', 'local-second')
+        const third = store.messages.addMessage(session.id, 'third', 'local-third')
+        store.messages.markMessagesInvoked(session.id, ['local-first'], 1_000)
+        store.messages.markMessagesInvoked(session.id, ['local-second'], 2_000)
+        store.messages.markMessagesInvoked(session.id, ['local-third'], 3_000)
+
+        const latest = makeService(store).getMessagesPage(session.id, { limit: 2, before: null })
+        const older = makeService(store).getMessagesPage(session.id, {
+            limit: 2,
+            before: { at: latest.page.nextBeforeAt!, seq: latest.page.nextBeforeSeq! }
+        })
+
+        expect(older.messages.map((message) => message.id)).toEqual([first.id])
+        expect(older.page.nextBeforeAt).toBe(1_000)
+        expect(older.page.nextBeforeSeq).toBe(first.seq)
+        expect(older.page.hasMore).toBe(false)
+        expect(second.id).toBeDefined()
+        expect(third.id).toBeDefined()
+    })
+
+    it('breaks equal timestamp ties by seq', () => {
+        const store = makeStore()
+        const session = makeSession(store, 'page-tie')
+        const first = store.messages.addMessage(session.id, 'first', 'local-first')
+        const second = store.messages.addMessage(session.id, 'second', 'local-second')
+        const third = store.messages.addMessage(session.id, 'third', 'local-third')
+        store.messages.markMessagesInvoked(session.id, ['local-first', 'local-second', 'local-third'], 1_000)
+
+        const latest = makeService(store).getMessagesPage(session.id, { limit: 2, before: null })
+        const older = makeService(store).getMessagesPage(session.id, {
+            limit: 2,
+            before: { at: latest.page.nextBeforeAt!, seq: latest.page.nextBeforeSeq! }
+        })
+
+        expect(latest.messages.map((message) => message.id)).toEqual([second.id, third.id])
+        expect(latest.page.nextBeforeAt).toBe(1_000)
+        expect(latest.page.nextBeforeSeq).toBe(second.seq)
+        expect(older.messages.map((message) => message.id)).toEqual([first.id])
+    })
+
+    it('orders scheduled queued messages by their display position without changing the cursor', () => {
+        const store = makeStore()
+        const session = makeSession(store, 'page-scheduled')
+        const scheduled = store.messages.addMessage(session.id, 'scheduled', 'local-scheduled', Date.now() + 60_000)
+        const invoked = store.messages.addMessage(session.id, 'invoked', 'local-invoked')
+        store.messages.markMessagesInvoked(session.id, ['local-invoked'], scheduled.createdAt + 1_000)
+
+        const page = makeService(store).getMessagesPage(session.id, { limit: 1, before: null })
+
+        expect(page.messages.map((message) => message.id)).toEqual([scheduled.id, invoked.id])
+        expect(page.page.nextBeforeAt).toBe(scheduled.createdAt + 1_000)
+        expect(page.page.nextBeforeSeq).toBe(invoked.seq)
+        expect(page.page.hasMore).toBe(true)
+    })
+})
+
 describe('MessageService.cancelQueuedMessage race scenarios', () => {
     describe('Race-A: CLI ack removed:true → DELETE + status=cancelled', () => {
         it('returns cancelled and emits message-cancelled SSE after CLI confirms removal', async () => {
@@ -769,17 +915,23 @@ describe('MessageService.releaseMatureScheduledMessages', () => {
     it('#10 hub cold-start restart: mature message is re-emitted by new Store+Service (true restart sim)', () => {
         const dir = mkdtempSync(join(tmpdir(), 'hapi-restart-test-'))
         const dbPath = join(dir, 'test.db')
+        let store1: Store | undefined
+        let store2: Store | undefined
         try {
             // First "run": write a mature scheduled message to disk
-            const store1 = new Store(dbPath)
+            store1 = new Store(dbPath)
             const session = store1.sessions.getOrCreateSession('restart-test', { path: '/tmp/restart' }, null, 'default')
+            const sessionId = session.id
             const now = Date.now()
             const past = now - 2000
-            store1.messages.addMessage(session.id, { role: 'user', content: { type: 'text', text: 'restart me' } }, 'local-restart', past)
+            store1.messages.addMessage(sessionId, { role: 'user', content: { type: 'text', text: 'restart me' } }, 'local-restart', past)
 
-            // Simulate hub shutdown — close is implicit when GC'd in Bun, but we move on
+            // Simulate hub shutdown before opening a fresh Store.
+            store1.close()
+            store1 = undefined
+
             // Second "run": fresh Store + fresh MessageService (cold start)
-            const store2 = new Store(dbPath)
+            store2 = new Store(dbPath)
             const cliEmitted: unknown[] = []
             const io2 = {
                 of: (ns: string) => ({
@@ -801,10 +953,12 @@ describe('MessageService.releaseMatureScheduledMessages', () => {
             expect(cliEmitted).toHaveLength(1)
 
             // invoked_at must still be null (CLI hasn't acked yet)
-            const msgs = store2.messages.getMessages(session.id)
+            const msgs = store2.messages.getMessages(sessionId)
             const msg = msgs.find(m => m.localId === 'local-restart')!
             expect(msg.invokedAt).toBeNull()
         } finally {
+            store2?.close()
+            store1?.close()
             rmSync(dir, { recursive: true, force: true })
         }
     })

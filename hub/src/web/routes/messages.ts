@@ -1,44 +1,8 @@
 import { Hono } from 'hono'
-import { AttachmentMetadataSchema } from '@hapi/protocol/schemas'
-import { z } from 'zod'
+import { MessagesQuerySchema, SendMessageRequestSchema } from '@hapi/protocol'
 import type { SyncEngine } from '../../sync/syncEngine'
 import type { WebAppEnv } from '../middleware/auth'
 import { requireSessionFromParam, requireSyncEngine } from './guards'
-
-const querySchema = z.object({
-    limit: z.coerce.number().int().min(1).max(200).optional(),
-    beforeSeq: z.coerce.number().int().min(1).optional(),
-    byPosition: z.string().optional(),
-    beforeAt: z.coerce.number().int().min(0).optional(),
-})
-
-const sendMessageBodySchema = z.object({
-    text: z.string(),
-    localId: z.string().min(1).optional(),
-    attachments: z.array(AttachmentMetadataSchema).optional(),
-    scheduledAt: z.number().int().positive().nullable().optional()
-}).refine(
-    // Scheduled messages need a localId so the ack flow (markMessagesInvoked
-    // by localId) can flip invoked_at after the CLI consumes them.  Without
-    // a localId, addMessage stamps invoked_at immediately, which would
-    // silently swallow the schedule.
-    (data) => data.scheduledAt == null || typeof data.localId === 'string',
-    { message: 'scheduledAt requires localId', path: ['localId'] }
-).refine(
-    // Cap scheduledAt at 7 days from now to prevent zombie rows.  REST/Telegram/
-    // automation callers bypass the frontend 7-day clamp, so we enforce it here.
-    // Evaluated at request time so Date.now() is fresh on every call.
-    (data) => data.scheduledAt == null || data.scheduledAt <= Date.now() + 7 * 24 * 60 * 60 * 1000,
-    { message: 'scheduledAt must be within 7 days from now', path: ['scheduledAt'] }
-).refine(
-    // Attachment paths are stored under the CLI session's upload directory and
-    // purged on session end (cleanupUploadDir in apiSession.ts:sendSessionDeath).
-    // A scheduled message that matures after the CLI exits would dereference
-    // deleted files via the @path attachment formatter.  Reject the combination
-    // until uploads are retained through invocation.
-    (data) => data.scheduledAt == null || !data.attachments?.length,
-    { message: 'scheduled messages with attachments are not supported', path: ['attachments'] }
-)
 
 export function createMessagesRoutes(getSyncEngine: () => SyncEngine | null): Hono<WebAppEnv> {
     const app = new Hono<WebAppEnv>()
@@ -55,22 +19,16 @@ export function createMessagesRoutes(getSyncEngine: () => SyncEngine | null): Ho
         }
         const sessionId = sessionResult.sessionId
 
-        const parsed = querySchema.safeParse(c.req.query())
-        const limit = parsed.success ? (parsed.data.limit ?? 50) : 50
-
-        // V8 byPosition mode: use composite (position_at, seq) cursor
-        if (parsed.success && parsed.data.byPosition === '1') {
-            const beforeAt = parsed.data.beforeAt
-            const beforeSeq = parsed.data.beforeSeq
-            const before = (beforeAt !== undefined && beforeSeq !== undefined)
-                ? { at: beforeAt, seq: beforeSeq }
-                : null
-            return c.json(engine.getMessagesPageByPosition(sessionId, { limit, before }))
+        const parsed = MessagesQuerySchema.safeParse(c.req.query())
+        if (!parsed.success) {
+            return c.json({ error: 'Invalid query', issues: parsed.error.flatten() }, 400)
         }
 
-        // V7-compatible path: seq-based cursor
-        const beforeSeq = parsed.success ? (parsed.data.beforeSeq ?? null) : null
-        return c.json(engine.getMessagesPage(sessionId, { limit, beforeSeq }))
+        const limit = parsed.data.limit ?? 50
+        const before = parsed.data.beforeAt !== undefined && parsed.data.beforeSeq !== undefined
+            ? { at: parsed.data.beforeAt, seq: parsed.data.beforeSeq }
+            : null
+        return c.json(engine.getMessagesPage(sessionId, { limit, before }))
     })
 
     app.delete('/sessions/:id/messages/:messageId', async (c) => {
@@ -103,7 +61,7 @@ export function createMessagesRoutes(getSyncEngine: () => SyncEngine | null): Ho
         const sessionId = sessionResult.sessionId
 
         const body = await c.req.json().catch(() => null)
-        const parsed = sendMessageBodySchema.safeParse(body)
+        const parsed = SendMessageRequestSchema.safeParse(body)
         if (!parsed.success) {
             return c.json({ error: 'Invalid body', issues: parsed.error.flatten() }, 400)
         }

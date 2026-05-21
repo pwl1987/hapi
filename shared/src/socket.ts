@@ -1,5 +1,7 @@
 import { z } from 'zod'
 import type { CodexCollaborationMode, PermissionMode } from './modes'
+import type { SessionEndReason } from './schemas'
+export { SessionEndReasonSchema, type SessionEndReason } from './schemas'
 
 export type SocketErrorReason = 'namespace-missing' | 'access-denied' | 'not-found'
 
@@ -67,9 +69,6 @@ export const TerminalErrorPayloadSchema = z.object({
 })
 
 export type TerminalErrorPayload = z.infer<typeof TerminalErrorPayloadSchema>
-export const SessionEndReasonSchema = z.enum(['completed', 'terminated', 'error'])
-export type SessionEndReason = z.infer<typeof SessionEndReasonSchema>
-
 export const UpdateNewMessageBodySchema = z.object({
     t: z.literal('new-message'),
     sid: z.string(),
@@ -138,6 +137,58 @@ export const UpdateSchema = z.object({
 
 export type Update = z.infer<typeof UpdateSchema>
 
+export type UpdateMetadataAck = {
+    result: 'error'
+    reason?: SocketErrorReason
+} | {
+    result: 'version-mismatch'
+    version: number
+    metadata: unknown | null
+} | {
+    result: 'success'
+    version: number
+    metadata: unknown | null
+}
+
+export type UpdateStateAck = {
+    result: 'error'
+    reason?: SocketErrorReason
+} | {
+    result: 'version-mismatch'
+    version: number
+    agentState: unknown | null
+} | {
+    result: 'success'
+    version: number
+    agentState: unknown | null
+}
+
+export type MachineUpdateMetadataAck = {
+    result: 'error'
+    reason?: SocketErrorReason
+} | {
+    result: 'version-mismatch'
+    version: number
+    metadata: unknown | null
+} | {
+    result: 'success'
+    version: number
+    metadata: unknown | null
+}
+
+export type MachineUpdateStateAck = {
+    result: 'error'
+    reason?: SocketErrorReason
+} | {
+    result: 'version-mismatch'
+    version: number
+    runnerState: unknown | null
+} | {
+    result: 'success'
+    version: number
+    runnerState: unknown | null
+}
+
 export interface ServerToClientEvents {
     update: (data: Update, ack?: (response: CancelQueuedMessageAck) => void) => void
     'rpc-request': (data: { method: string; params: string }, callback: (response: string) => void) => void
@@ -163,55 +214,11 @@ export interface ClientToServerEvents {
     }) => void
     'session-end': (data: { sid: string; time: number; reason?: SessionEndReason }) => void
     'messages-consumed': (data: { sid: string; localIds: string[] }) => void
-    'update-metadata': (data: { sid: string; expectedVersion: number; metadata: unknown }, cb: (answer: {
-        result: 'error'
-        reason?: SocketErrorReason
-    } | {
-        result: 'version-mismatch'
-        version: number
-        metadata: unknown | null
-    } | {
-        result: 'success'
-        version: number
-        metadata: unknown | null
-    }) => void) => void
-    'update-state': (data: { sid: string; expectedVersion: number; agentState: unknown | null }, cb: (answer: {
-        result: 'error'
-        reason?: SocketErrorReason
-    } | {
-        result: 'version-mismatch'
-        version: number
-        agentState: unknown | null
-    } | {
-        result: 'success'
-        version: number
-        agentState: unknown | null
-    }) => void) => void
+    'update-metadata': (data: { sid: string; expectedVersion: number; metadata: unknown }, cb: (answer: UpdateMetadataAck) => void) => void
+    'update-state': (data: { sid: string; expectedVersion: number; agentState: unknown | null }, cb: (answer: UpdateStateAck) => void) => void
     'machine-alive': (data: { machineId: string; time: number }) => void
-    'machine-update-metadata': (data: { machineId: string; expectedVersion: number; metadata: unknown }, cb: (answer: {
-        result: 'error'
-        reason?: SocketErrorReason
-    } | {
-        result: 'version-mismatch'
-        version: number
-        metadata: unknown | null
-    } | {
-        result: 'success'
-        version: number
-        metadata: unknown | null
-    }) => void) => void
-    'machine-update-state': (data: { machineId: string; expectedVersion: number; runnerState: unknown | null }, cb: (answer: {
-        result: 'error'
-        reason?: SocketErrorReason
-    } | {
-        result: 'version-mismatch'
-        version: number
-        runnerState: unknown | null
-    } | {
-        result: 'success'
-        version: number
-        runnerState: unknown | null
-    }) => void) => void
+    'machine-update-metadata': (data: { machineId: string; expectedVersion: number; metadata: unknown }, cb: (answer: MachineUpdateMetadataAck) => void) => void
+    'machine-update-state': (data: { machineId: string; expectedVersion: number; runnerState: unknown | null }, cb: (answer: MachineUpdateStateAck) => void) => void
     'rpc-register': (data: { method: string }) => void
     'rpc-unregister': (data: { method: string }) => void
     'terminal:ready': (data: TerminalReadyPayload) => void
