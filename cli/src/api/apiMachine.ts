@@ -10,6 +10,7 @@ import { logger } from '@/ui/logger'
 import { configuration } from '@/configuration'
 import type { Update, UpdateMachineBody } from '@hapi/protocol'
 import type { MachineDirectoryEntry, MachineListDirectoryResponse, PathExistsResponse } from '@hapi/protocol/apiTypes'
+import { RPC_METHODS } from '@hapi/protocol/rpcMethods'
 import type { RunnerState, Machine, MachineMetadata } from './types'
 import { RunnerStateSchema, MachineMetadataSchema } from './types'
 import { backoff } from '@/utils/time'
@@ -127,7 +128,7 @@ export class ApiMachineClient {
 
         registerCommonHandlers(this.rpcHandlerManager, getInvokedCwd())
 
-        this.rpcHandlerManager.registerHandler<PathExistsRequest, PathExistsResponse>('path-exists', async (params) => {
+        this.rpcHandlerManager.registerHandler<PathExistsRequest, PathExistsResponse>(RPC_METHODS.PathExists, async (params) => {
             const rawPaths = Array.isArray(params?.paths) ? params.paths : []
             const uniquePaths = Array.from(new Set(rawPaths.filter((path): path is string => typeof path === 'string')))
             const exists: Record<string, boolean> = {}
@@ -146,7 +147,7 @@ export class ApiMachineClient {
             return { exists }
         })
 
-        this.rpcHandlerManager.registerHandler<ListMachineDirectoryRequest, MachineListDirectoryResponse>('list-directory', async (params) => {
+        this.rpcHandlerManager.registerHandler<ListMachineDirectoryRequest, MachineListDirectoryResponse>(RPC_METHODS.ListMachineDirectory, async (params) => {
             if (!this.normalizedWorkspaceRoots?.length) {
                 return { success: false, error: 'Workspace browsing is not enabled for this machine' }
             }
@@ -224,7 +225,7 @@ export class ApiMachineClient {
         // delegating to the lower-level probe. This intentionally overwrites the
         // earlier registration on the same scoped method name.
         this.rpcHandlerManager.registerHandler<ListOpencodeModelsForCwdRequest, ListOpencodeModelsForCwdResponse>(
-            'listOpencodeModelsForCwd',
+            RPC_METHODS.ListOpencodeModelsForCwd,
             async (params) => {
                 const rawCwd = typeof params?.cwd === 'string' ? params.cwd.trim() : ''
                 if (!rawCwd) {
@@ -281,7 +282,7 @@ export class ApiMachineClient {
     }
 
     setRPCHandlers({ spawnSession, stopSession, requestShutdown }: MachineRpcHandlers): void {
-        this.rpcHandlerManager.registerHandler('spawn-happy-session', async (params: any) => {
+        this.rpcHandlerManager.registerHandler(RPC_METHODS.SpawnHappySession, async (params: any) => {
             const { directory, sessionId, resumeSessionId, machineId, approvedNewDirectoryCreation, agent, model, effort, modelReasoningEffort, yolo, permissionMode, token, sessionType, worktreeName } = params || {}
 
             if (!directory) {
@@ -320,7 +321,7 @@ export class ApiMachineClient {
             }
         })
 
-        this.rpcHandlerManager.registerHandler('stop-session', (params: any) => {
+        this.rpcHandlerManager.registerHandler(RPC_METHODS.StopSession, (params: any) => {
             const { sessionId } = params || {}
             if (!sessionId) {
                 throw new Error('Session ID is required')
@@ -334,7 +335,7 @@ export class ApiMachineClient {
             return { message: 'Session stopped' }
         })
 
-        this.rpcHandlerManager.registerHandler('stop-runner', () => {
+        this.rpcHandlerManager.registerHandler(RPC_METHODS.StopRunner, () => {
             setTimeout(() => requestShutdown(), 100)
             return { message: 'Runner stop request acknowledged' }
         })

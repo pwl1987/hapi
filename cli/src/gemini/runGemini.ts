@@ -13,6 +13,7 @@ import { startHookServer } from '@/claude/utils/startHookServer';
 import { cleanupHookSettingsFile, generateHookSettingsFile } from '@/modules/common/hooks/generateHookSettings';
 import { resolveGeminiRuntimeConfig } from './utils/config';
 import { isPermissionModeAllowedForFlavor } from '@hapi/protocol';
+import { RPC_METHODS } from '@hapi/protocol/rpcMethods';
 import { PermissionModeSchema } from '@hapi/protocol/schemas';
 import { formatMessageWithAttachments } from '@/utils/attachmentFormatter';
 import { getInvokedCwd } from '@/utils/invokedCwd';
@@ -164,7 +165,7 @@ export async function runGemini(opts: {
         return value.trim();
     };
 
-    session.rpcHandlerManager.registerHandler('set-session-config', async (payload: unknown) => {
+    session.rpcHandlerManager.registerHandler(RPC_METHODS.SetSessionConfig, async (payload: unknown) => {
         if (!payload || typeof payload !== 'object') {
             throw new Error('Invalid session config payload');
         }
